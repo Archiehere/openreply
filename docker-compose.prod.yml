@@ -1,0 +1,80 @@
+# OpenReply — production stack for self-hosting alongside other services on
+# the same box. Run: docker compose -f docker-compose.prod.yml up -d --build
+#
+# web joins the external `postiz_postiz-network` so the existing Caddy
+# container (already holding ports 80/443) can reverse-proxy to it by
+# container name. No ports are published to the host — the only way in is
+# through Caddy's TLS.
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: openreply-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: openreply
+      POSTGRES_USER: openreply
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - openreply_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openreply"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - openreply-internal
+
+  redis:
+    image: redis:7-alpine
+    container_name: openreply-redis
+    restart: unless-stopped
+    volumes:
+      - openreply_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - openreply-internal
+
+  web:
+    build:
+      context: .
+      target: web
+    container_name: openreply-web
+    restart: unless-stopped
+    env_file: .env.production
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - openreply-internal
+      - postiz_postiz-network
+
+  worker:
+    build:
+      context: .
+      target: worker
+    container_name: openreply-worker
+    restart: unless-stopped
+    env_file: .env.production
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - openreply-internal
+
+networks:
+  openreply-internal:
+  postiz_postiz-network:
+    external: true
+
+volumes:
+  openreply_pgdata:
+  openreply_redisdata:

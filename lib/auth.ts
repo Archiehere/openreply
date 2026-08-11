@@ -6,6 +6,15 @@ import { ensureWorkspaceForUser, getPrimaryWorkspace } from "@/lib/workspace";
 
 type AdapterPrismaClient = Parameters<typeof PrismaAdapter>[0];
 
+// Empty ALLOWED_EMAILS means open signup (any email may sign in). Set it to
+// lock this instance down to specific owners.
+function getAllowedEmails(): string[] {
+  return (process.env.ALLOWED_EMAILS ?? "")
+    .split(",")
+    .map((email) => email.trim().toLowerCase())
+    .filter(Boolean);
+}
+
 export const authConfig = {
   adapter: PrismaAdapter(prisma as unknown as AdapterPrismaClient),
   providers: [
@@ -15,6 +24,25 @@ export const authConfig = {
     }),
   ],
   callbacks: {
+    async signIn({ user }) {
+      const email = (user.email ?? "").toLowerCase();
+      if (!email) return false;
+
+      const allowedEmails = getAllowedEmails();
+      if (allowedEmails.length > 0) {
+        return allowedEmails.includes(email);
+      }
+
+      // No explicit allowlist: sign-in is only ever allowed for an email
+      // that already has an account, so no new account can ever be created
+      // through this form. The one exception is an empty database, which
+      // bootstraps the very first (owner) account on first sign-in.
+      const existingUser = await prisma.user.findUnique({ where: { email } });
+      if (existingUser) return true;
+
+      const userCount = await prisma.user.count();
+      return userCount === 0;
+    },
     async session({ session, user }) {
       if (session.user) {
         session.user.id = user.id;
